@@ -1,0 +1,112 @@
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+import yfinance as yf
+import matplotlib.pyplot as plt
+import seaborn as sns
+from datetime import datetime, timedelta
+import io
+from fpdf import FPDF
+import base64
+
+def get_portfolio_data():
+    tickers = ['NVDA', 'MSFT', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'CRM']
+    weights = np.array([0.15, 0.15, 0.15, 0.15, 0.1, 0.1, 0.1, 0.1])
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=365)
+    data = yf.download(tickers, start=start_date, end=end_date)['Close']
+    returns = data.pct_change().dropna()
+    portfolio_returns = returns.dot(weights)
+    return tickers, weights, returns, portfolio_returns, data
+
+def calculate_metrics(portfolio_returns):
+    annual_return = np.mean(portfolio_returns) * 252
+    annual_vol = np.std(portfolio_returns) * np.sqrt(252)
+    sharpe_ratio = annual_return / annual_vol
+    cumulative_return = (1 + portfolio_returns).prod() - 1
+    return annual_return, annual_vol, sharpe_ratio, cumulative_return
+
+def generate_pdf_report(metrics_df, allocation_df):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font('Arial', 'B', 16)
+    pdf.cell(0, 10, 'Portfolio Analysis Report', 0, 1, 'C')
+    pdf.set_font('Arial', '', 12)
+    
+    pdf.cell(0, 10, 'Portfolio Metrics:', 0, 1)
+    for _, row in metrics_df.iterrows():
+        pdf.cell(0, 10, f'{row["Metric"]}: {row["Value"]}', 0, 1)
+    
+    pdf.cell(0, 10, 'Portfolio Allocation:', 0, 1)
+    for _, row in allocation_df.iterrows():
+        pdf.cell(0, 10, f'{row["Stock"]}: {row["Weight"]:.1%}', 0, 1)
+    
+    pdf_output = io.BytesIO()
+    pdf.output(pdf_output)
+    return pdf_output.getvalue()
+
+def get_download_link(file_content, filename):
+    b64 = base64.b64encode(file_content).decode()
+    return f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}">Download {filename}</a>'
+
+st.set_page_config(page_title="Portfolio Analysis", layout="wide")
+st.title("Portfolio Analysis Dashboard")
+
+# Get data
+tickers, weights, returns, portfolio_returns, price_data = get_portfolio_data()
+annual_return, annual_vol, sharpe_ratio, cumulative_return = calculate_metrics(portfolio_returns)
+
+# Sidebar
+st.sidebar.header("Portfolio Settings")
+initial_investment = st.sidebar.number_input("Initial Investment ($)", value=10000)
+
+# Main content
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("Current Portfolio Allocation")
+    allocation_df = pd.DataFrame({
+        'Stock': tickers,
+        'Weight': weights
+    })
+    st.dataframe(allocation_df)
+
+    metrics_df = pd.DataFrame({
+        'Metric': ['Annual Return', 'Annual Volatility', 'Sharpe Ratio', 'Cumulative Return'],
+        'Value': [f"{annual_return:.2%}", f"{annual_vol:.2%}", f"{sharpe_ratio:.2f}", f"{cumulative_return:.2%}"]
+    })
+    st.subheader("Portfolio Metrics")
+    st.dataframe(metrics_df)
+
+with col2:
+    st.subheader("Correlation Matrix")
+    fig, ax = plt.subplots(figsize=(10, 8))
+    sns.heatmap(returns.corr(), annot=True, cmap='coolwarm', center=0, ax=ax)
+    st.pyplot(fig)
+
+# Portfolio Performance
+st.subheader("Portfolio Performance")
+fig, ax = plt.subplots(figsize=(12, 6))
+normalized_prices = price_data / price_data.iloc[0]
+normalized_prices.plot(ax=ax)
+ax.set_title('Portfolio Components Performance')
+ax.set_xlabel('Date')
+ax.set_ylabel('Normalized Price')
+ax.grid(True)
+st.pyplot(fig)
+
+# Export options
+st.subheader("Export Data")
+col3, col4 = st.columns(2)
+
+with col3:
+    if st.button("Generate PDF Report"):
+        pdf_content = generate_pdf_report(metrics_df, allocation_df)
+        st.markdown(get_download_link(pdf_content, "portfolio_report.pdf"), unsafe_allow_html=True)
+
+with col4:
+    if st.button("Export to CSV"):
+        csv_data = pd.concat([allocation_df, metrics_df], axis=1)
+        csv = csv_data.to_csv(index=False).encode()
+        st.markdown(get_download_link(csv, "portfolio_data.csv"), unsafe_allow_html=True)
